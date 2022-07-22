@@ -1,0 +1,969 @@
+---
+title: "Comparison of OD and titer values"
+author: "Mariam Fofana"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+```{r, setup, include=FALSE}
+# Change working directory as needed
+knitr::opts_knit$set(root.dir = "C:/Users/mof6/Dropbox/Work/")
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r format, echo=FALSE, include=FALSE, warnings=FALSE}
+# Load packages and source necessary files
+library(abind)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(forcats)
+library(statmod)
+library(GGally)
+library(boot)
+library(maditr)
+library(doBy)
+library(knitr)
+library(pROC)
+library(patchwork)
+library(kableExtra)
+library(DescTools)
+
+# I: LOAD & FORMAT DATA----------------------------------------------------
+dat1 <- read.csv("Serology methods/Data/Clean data/PrimaryAnalysis.csv", header = TRUE)
+# Prediction set
+dat2 <- read.csv("Serology methods/Data/Clean data/PredictionAnalysis.csv", header = TRUE)
+# Precision set
+dat3 <- read.csv("Serology methods/Data/Clean data/PrecisionAnalysis.csv", header = TRUE)
+
+glimpse(dat1)
+glimpse(dat2)
+glimpse(dat3)
+
+# pre-pandemic samples
+dat44 <- read.csv("Serology methods/Data/Clean data/PrePandemic.csv", header = TRUE)
+
+# L45 and L46 survey data
+dat4546 <- readRDS("Iwasaki collab/Data/Clean data/CleanAbridged_L44_L46_061122")
+
+# II: New variables---------------------------------------------
+# Extract endpoint titers (hi cutoff 1.1, lo cutoff 0.8)
+# Set 1 as the minimum titer value
+# Set interpolated titers with negative values to 0 on log10 scale
+
+dat1 <- dat1 %>% 
+  group_by(newid) %>% 
+  mutate(inter_l45.08 = replace(inter_l45.08, inter_l45.08 < 0 , 0)) %>%
+  mutate(inter_l45.11 = replace(inter_l45.11, inter_l45.11 < 0 , 0)) %>%
+  mutate(inter_l46.08 = replace(inter_l46.08, inter_l46.08 < 0 , 0)) %>%
+  mutate(inter_l46.11 = replace(inter_l46.11, inter_l46.11 < 0 , 0)) %>%
+  mutate(endhi45 = max(titer[which(ratio_l45 >= 1.1)], na.rm = T),        
+         endlo45 = max(titer[which(ratio_l45 >= 0.8)], na.rm = T),
+         endhi46 = max(titer[which(ratio_l46 >= 1.1)], na.rm = T),
+         endlo46 = max(titer[which(ratio_l46 >= 0.8)], na.rm = T)) %>%
+  mutate(across(c(endhi45, endlo45, endhi46, endlo46), ~ ifelse(.x < 0, 1, .x))) %>%
+  mutate(vaxyn2 = "F") %>%
+  mutate(vaxyn2 = replace(vaxyn2, vaxyn == T, "T")) %>%
+  mutate(ratiodel = ratio_l46 - ratio_l45) %>%
+  fill(inter_l45.08, .direction = "down") %>%
+  fill(inter_l45.11, .direction = "down") %>%
+  fill(inter_l46.08, .direction = "down") %>%
+  fill(inter_l46.11, .direction = "down") %>%
+  mutate(titerdel.08 = inter_l46.08 - inter_l45.08) %>%
+  mutate(titerdel.11 = inter_l46.11 - inter_l45.11) %>%
+  ungroup()
+
+dat1$exp <- interaction(dat1$pos45lo, dat1$vaxyn2, drop = F)
+dat1$exp2 <- interaction(dat1$pos45hi, dat1$vaxyn2, drop = F)
+
+dat2 <- dat2 %>% 
+  group_by(newid) %>% 
+  mutate(inter_l45.08 = replace(inter_l45.08, inter_l45.08 < 0 , 0)) %>%
+  mutate(inter_l45.11 = replace(inter_l45.11, inter_l45.11 < 0 , 0)) %>%
+  mutate(inter_l46.08 = replace(inter_l46.08, inter_l46.08 < 0 , 0)) %>%
+  mutate(inter_l46.11 = replace(inter_l46.11, inter_l46.11 < 0 , 0)) %>%
+  mutate(endhi45 = max(titer[which(ratio_l45 >= 1.1)], na.rm = T),        
+         endlo45 = max(titer[which(ratio_l45 >= 0.8)], na.rm = T),
+         endhi46 = max(titer[which(ratio_l46 >= 1.1)], na.rm = T),
+         endlo46 = max(titer[which(ratio_l46 >= 0.8)], na.rm = T)) %>%
+  mutate(across(c(endhi45, endlo45, endhi46, endlo46), ~ ifelse(.x < 0, 1, .x))) %>%
+  mutate(vaxyn2 = "F") %>%
+  mutate(vaxyn2 = replace(vaxyn2, vaxyn == T, "T")) %>%
+  mutate(ratiodel = ratio_l46 - ratio_l45) %>%
+  fill(inter_l45.08, .direction = "down") %>%
+  fill(inter_l45.11, .direction = "down") %>%
+  fill(inter_l46.08, .direction = "down") %>%
+  fill(inter_l46.11, .direction = "down") %>%
+  mutate(titerdel.08 = inter_l46.08 - inter_l45.08) %>%
+  mutate(titerdel.11 = inter_l46.11 - inter_l45.11) %>%
+  ungroup()
+
+dat2$exp <- interaction(dat2$pos45lo, dat2$vaxyn2, drop = F)
+dat2$exp2 <- interaction(dat2$pos45hi, dat2$vaxyn2, drop = F)
+
+dat1b <- dat1 %>%
+  select(c("newid", "titer", "ratio_l45", "ratio_l46", "inter_l45.08", "inter_l45.11", "inter_l46.08", "inter_l46.11", "exp", "exp2", "pos45lo", "pos45hi")) %>%
+  rename(inter08_l45 = inter_l45.08, inter08_l46 = inter_l46.08,
+         inter11_l45 = inter_l45.11, inter11_l46 = inter_l46.11) %>%
+  pivot_longer(cols = -c("newid", "exp", "exp2", "pos45lo", "pos45hi", "titer"), 
+               names_to = c("var", "survey"), values_to = "result", names_sep = "_") %>%
+  pivot_wider(names_from = "var", values_from = "result")
+
+dat2b <- dat2 %>%
+    select(c("newid", "titer", "ratio_l45", "ratio_l46", "inter_l45.08", "inter_l45.11", "inter_l46.08", "inter_l46.11", "exp", "exp2", "pos45lo", "pos45hi")) %>%
+  rename(inter08_l45 = inter_l45.08, inter08_l46 = inter_l46.08,
+         inter11_l45 = inter_l45.11, inter11_l46 = inter_l46.11) %>%
+  pivot_longer(cols = -c("newid", "exp", "exp2", "pos45lo", "pos45hi", "titer"), 
+               names_to = c("var", "survey"), values_to = "result", names_sep = "_") %>%
+  pivot_wider(names_from = "var", values_from = "result")
+
+dat1c <- subset(dat1, titer == 100)
+
+# Impute NA for log10 interpolated titer < 0
+dat3 <- dat3 %>%
+  mutate(inter_l46.08 = replace(inter_l46.08, inter_l46.08 < 0 , NA)) %>%
+  mutate(inter_l46.11 = replace(inter_l46.11, inter_l46.11 < 0 , NA)) 
+
+# Set color palette
+mycol <- c("#414487ff", "#35b779ff", "#cb4149ff", "#0d0887")
+
+```
+
+### Objectives
+This analysis describes the comparison for normalized OD obtained a single dilution, with titers obtained from multiple serial dilutions, for SARS-CoV-2 anti-S IgG among residents of Pau da Lima (Salvador, Brazil) participating in a cohort study.  
+
+The aim is to identify an appropriate method for quantification of circulating antibody response that is less laborious and resource-intensive than titers from multiple serial dilutions, and that could be used in ongoing serological surveys.  
+
+Specifically, the analyses aim to assess whether normalized OD values are adequate to reliably (a) identify seropositive/seronegative individuals and (b) estimate change in antibody levels over time.
+
+### Study population
+Details of the cohort study population and recruitment are described in Belitardo et al. The overall study population includes `r nrow(subset(dat4546, !is.na(nodl45) & !is.na(nodl46)))` individuals who participated in a first (November 2020 to February 2021) and second (July to October 2021) SARS-CoV-2 serosurveys. Of these, `r nrow(subset(dat4546, !is.na(nodl45) & !is.na(nodl46) & nodl45 >= 0.8))` had evidence of prior SARS-CoV-2 infection during the initialy survey, and `r nrow(subset(dat4546, !is.na(nodl45) & !is.na(nodl46) & d1pre46 == T))` received at least 1 vaccine dose prior to the second survey.
+
+The present study used serial serum samples from a subset of 54 individuals who participated in  both serosurveys. These samples were used to derive the relationship between normalized OD at a single dilution and interpolated titers derived from serial dilutions. The exposure histories (prior infection and/or vaccination) of these 54 individuals are shown below.
+
+```{r desc1, echo=FALSE, warnings=FALSE}
+sumtab <- dat1 %>%
+  filter(titer == 100) %>%
+  group_by(exp) %>%
+  summarise(n())
+
+exptab <- tibble(exp = levels(dat1$exp),
+                 inf = c("No", "Yes", "No", "Yes"),
+                 vax = c("No", "No", "Yes", "Yes"))
+
+sumtab <- tibble("Evidence of infection in 1st survey" = exptab$inf[match(sumtab$exp, exptab$exp)],
+                  "Vaccination prior to 2nd survey" = exptab$vax[match(sumtab$exp, exptab$exp)],
+                  "N" = as.numeric(unlist(sumtab[, 2])))
+
+```
+
+`r kable(sumtab) %>% kable_styling(full_width = F)`
+  
+  
+An additional 40 samples were selected to test the predictive performance of normalized OD. The exposure histories (prior infection and/or vaccination) of these 40 individuals are shown below.
+
+```{r desc2, echo=FALSE, warnings=FALSE}
+sumtab2 <- dat2 %>%
+  filter(titer == 100) %>%
+  group_by(exp) %>%
+  summarise(n())
+
+sumtab2 <- tibble("Evidence of infection in 1st survey" = exptab$inf[match(sumtab2$exp, exptab$exp)],
+                  "Vaccination prior to 2nd survey" = exptab$vax[match(sumtab2$exp, exptab$exp)],
+                  "N" = as.numeric(unlist(sumtab2[, 2])))
+
+```
+
+`r kable(sumtab2) %>% kable_styling(full_width = F)`
+  
+
+### Figure 1
+A: nOD values of samples collected during survey 1 (pink) and survey 2 (green). 
+
+```{r fig1a, echo=FALSE, warnings=FALSE}
+dat1 %>%
+  filter(titer == 100) %>%
+  select(c("newid", "nodl45", "nodl46")) %>%
+  pivot_longer(cols = c("nodl45", "nodl46"), names_to = "survey", values_to = "nod") %>%
+  ggplot() +
+  geom_histogram(aes(x = nod, fill = survey), color = "darkgray", breaks = seq(0, 10, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 10, 1), name = "nOD", labels = c(0, "", 2, "", 4, "", 6, "", 8, "", 10)) +
+  scale_y_continuous(name = "Count", breaks = seq(0, 18, 5)) +
+  scale_fill_manual(name = "Survey", labels = c("Survey 1", "Survey 2"),
+                      values = mycol[1:2]) +
+  theme_classic()
+
+```
+
+B: Difference in nOD values between survey 2 and survey 1. 
+```{r fig1b, echo=FALSE, warnings=FALSE}
+dat1 %>%
+  filter(titer == 100) %>%
+  ggplot() +
+  geom_histogram(aes(x = noddiff), color = "darkgray", breaks = seq(-5, 8, 1)) +
+  scale_x_continuous(breaks = seq(-5, 8, 1), name = "nOD difference (Survey 2 - Survey 1)", labels = c(rbind(rep("" ), seq(-4, 8, 2)))) +
+  scale_y_continuous(name = "Count", breaks = seq(0, 18, 5)) +
+  theme_classic()
+```
+
+C: Ratio of nOD values (survey 2: survey 1).
+```{r fig1c, echo=FALSE, warnings=FALSE}
+dat1 %>%
+  filter(titer == 100) %>%
+  ggplot() +
+  geom_histogram(aes(x = nodratio), color = "darkgray", breaks = 0.0625 * 2 ^ seq(0, 10, 0.5)) +
+  scale_x_continuous(trans = "log2", breaks = 0.25 * 2 ^ seq(0, 8, 1), name = "nOD ratio (Survey 2 / Survey 1)", labels = c(0.25, "", 1, "", 4, "", 16, "", 32)) +
+  scale_y_continuous(name = "Count", breaks = seq(0, 18, 5)) +
+  theme_classic()
+```
+  
+
+### Changes in OD values over time
+
+```{r reviews, echo = F, include = F, warnings = F}
+# Comparison of OD values based on time of sample collection
+tmplm1 <- summary(lm(nodl45 ~ dsampl45, dat4546))
+tmplm2 <- summary(lm(nodl46 ~ dsampl46, dat4546))
+
+# Distribution of OD values among those with infection in 1st vs 2nd wave
+tmpnod1 <- dat4546$nodl45[which(dat4546$pos45lo == "IgG +")]
+tmpnod2 <- dat4546$nodl46[which(dat4546$pos45lo == "IgG -" & dat4546$pos46lo == "IgG +" & dat4546$vaxyn == "No")]
+
+tmpt <- t.test(tmpnod1, tmpnod2, alternative = c("two.sided", "less", "greater"), 
+        paired = FALSE, var.equal = FALSE, conf.level = 0.95)
+
+summary(tmpnod1)
+sd(tmpnod1)
+summary(tmpnod2)
+sd(tmpnod2)
+```
+
+There was a weak correlation between calendar time and normalized OD, with $r^2$ values of `r tmplm1$adj.r.squared` in the first survey, and `r tmplm2$adj.r.squared` in the second survey. Among individuals who had evidence of prior SARS-CoV-2 infection during the first survey, the mean (SD) normalized OD value was `r mean(tmpnod1)` (`r sd(tmpnod1)`). Among those with no evidence of infection during the first survey, but who subsequently had detectable IgG levels during the second survey without being vaccinated (such that positive IgG can be presumed to result from infection), the mean (SD) nOD value was `r mean(tmpnod2)` (`r sd(tmpnod2)`). The mean difference in nOD values is `r diff(tmpt$estimate)` (95% CI `r abs(tmpt$conf.int[2])` - `r abs(tmpt$conf.int[1])`).
+
+
+### Table 1: Choice of OD cutoff
+For the Euroimmun assay, the manufacturer recommends that samples with OD ratio values <0.8 are considered negative, those with values >=0.8 and <1.1 considered borderline, and those with values >=1.1 considered positive. 
+
+A commonly used method to establish OD cutoffs for serology assays in the absence of known positive standards is that proposed by Frey et al (DOI: 10.1016/s0022-1759(98)00170-7), using the upper prediction limit based on Student's t distribution.
+
+Using `r nrow(dat44)` serological samples from the most recent pre-pandemic survey (conducted September to November 2019) as known negatives, using this methods yields the following cutoffs by desired significance level:
+
+```{r cutoff, echo=FALSE, include=FALSE, warnings=FALSE}
+
+# Cutoff per formula proposed by Frey et al:
+# Calculate multiplier: t*sqrt(1 + 1/n)
+cutoff <- tibble(alpha = c(95, 97.5, 99, 99.5, 99.9)) %>%
+  mutate(tvec = qt((alpha/100), df = nrow(dat44) - 1)) %>%
+  mutate(fvec = tvec * sqrt(1 + 1/nrow(dat44))) %>%
+  mutate(raw = mean(dat44$od_l44) + sd(dat44$od_l44) * fvec) %>%
+  mutate(ratio = mean(dat44$ratio_l44) + sd(dat44$ratio_l44) * fvec)
+```
+
+
+```{r table1, echo=FALSE, include=TRUE, warnings=FALSE}  
+kable(cutoff[, -(2:3)], col.names = c("alpha", "Raw OD \n cutoff", "Normalized OD\n cutoff")) %>%
+  kable_styling(full_width = F)
+
+```
+
+
+### Table 2: Fit of nOD/titer curve 
+We fit the relationship between normalized OD at a single dilution and titer derived from serial dilutions, using a 5-parameter log-log curve with the following form: $Y = c + \frac{d - c}{[1 + (\frac{x}{e}) ^ b] ^ f}$. The fitted parameters are shown below, for nOD at single dilutions of 1:100 and 1:8100.
+
+```{r fit, echo=FALSE, include=TRUE, warnings=FALSE}
+
+library(drc)
+library(aomisc)
+library(sandwich)
+library(lmtest)
+
+fit1 <- drm(ratio ~ inter08, fct = LL.5(), data = subset(dat1b, titer == 100))
+fit2 <- drm(ratio ~ inter11, fct = LL.5(), data = subset(dat1b, titer == 100))
+
+fit300 <- drm(ratio ~ inter08, fct = LL.5(), data = subset(dat1b, titer == 300))
+fit900 <- drm(ratio ~ inter08, fct = LL.5(), data = subset(dat1b, titer == 900))
+fit2700 <- drm(ratio ~ inter08, fct = LL.5(), data = subset(dat1b, titer == 2700))
+fit8100 <- drm(ratio ~ inter08, fct = LL.5(), data = subset(dat1b, titer == 8100))
+
+fit1tab <- summary(fit1)$coefficients[, 1:2]
+fit2tab <- summary(fit2)$coefficients[, 1:2]
+
+fit300tab <- summary(fit300)$coefficients[, 1:2]
+fit900tab <- summary(fit900)$coefficients[, 1:2]
+fit2700tab <- summary(fit2700)$coefficients[, 1:2]
+fit8100tab <- summary(fit8100)$coefficients[, 1:2]
+
+predtab <- data.frame(cbind(xfit = seq(0, 7, 0.01),
+                  predict(fit1, data.frame(ratio = seq(0, 7, 0.01)), interval = "confidence"),
+                  predict(fit2, data.frame(ratio = seq(0, 7, 0.01)), interval = "confidence"),
+                  predict(fit8100, data.frame(ratio = seq(0, 7, 0.01)), interval = "confidence")))
+
+colnames(predtab) <- c("xfit", "y1", "y1lo", "y1hi", "y2", "y2lo", "y2hi", 
+                       "y8100", "y8100lo", "y8100hi")
+
+# Compute values for prediction table
+yvec <- seq(0.7, 9.9, 0.1)
+yvec <- unname(c(fit1$coefficients[2] + 0.01, yvec, fit1$coefficients[3] - 0.01))
+yvec8100 <- seq(0.1, 6.2, 0.1)
+yvec8100 <- unname(c(fit8100$coefficients[2] + 0.01, yvec8100, fit8100$coefficients[3] - 0.01))
+
+invpred1 <- function(y) {
+  ED(fit1, y, interval = "delta", type = "absolute", display=F)
+}
+
+# invpred300 <- function(y) {
+#   ED(fit300, y, interval = "delta", type = "absolute", display=F)
+# }
+# invpred900 <- function(y) {
+#   ED(fit900, y, interval = "delta", type = "absolute", display=F)
+# }
+# invpred2700 <- function(y) {
+#   ED(fit2700, y, interval = "delta", type = "absolute", display=F)
+# }
+invpred8100 <- function(y) {
+  ED(fit8100, y, interval = "delta", type = "absolute", display=F)
+}
+
+predval <- cbind(yvec, t(sapply(yvec, invpred1)))
+predtabcomp100 <- cbind(yvec, predval[, -1])
+predtabcomp100 <- data.frame(predtabcomp100)
+colnames(predtabcomp100) = c("od", "pred", "se", "lci", "uci")
+
+# predval300 <- cbind(yvec, t(sapply(yvec, invpred300)))
+# predtabcomp300 <- cbind(yvec, predval300[, -1])
+# predtabcomp300 <- data.frame(predtabcomp300)
+# colnames(predtabcomp300) = c("od", "pred", "se", "lci", "uci")
+# 
+# predval900 <- cbind(yvec, t(sapply(yvec, invpred900)))
+# predtabcomp900 <- cbind(yvec, predval900[, -1])
+# predtabcomp900 <- data.frame(predtabcomp900)
+# colnames(predtabcomp900) = c("od", "pred", "se", "lci", "uci")
+# 
+# predval2700 <- cbind(yvec, t(sapply(yvec, invpred2700)))
+# predtabcomp2700 <- cbind(yvec, predval2700[, -1])
+# predtabcomp2700 <- data.frame(predtabcomp2700)
+# colnames(predtabcomp2700) = c("od", "pred", "se", "lci", "uci")
+
+predval8100 <- cbind(yvec8100, t(sapply(yvec8100, invpred8100)))
+predtabcomp8100 <- cbind(yvec8100, predval8100[, -1])
+predtabcomp8100 <- data.frame(predtabcomp8100)
+colnames(predtabcomp8100) = c("od", "pred", "se", "lci", "uci")
+
+# Compute predictions for set of 80 additional paired samples
+predval2 <- data.frame(t(sapply(dat2b$ratio[which(dat2b$titer == 100)], invpred1)))
+colnames(predval2) <- c("pred", "se", "lci", "uci")
+dat2b100 <- cbind(subset(dat2b, titer == 100), predval2)
+
+# predval300 <- data.frame(t(sapply(dat2b$ratio[which(dat2b$titer == 300)], invpred300)))
+# colnames(predval300) <- c("pred", "se", "lci", "uci")
+# dat2b300 <- cbind(subset(dat2b, titer == 300), predval300)
+# 
+# predval900 <- data.frame(t(sapply(dat2b$ratio[which(dat2b$titer == 900)], invpred900)))
+# colnames(predval900) <- c("pred", "se", "lci", "uci")
+# dat2b900 <- cbind(subset(dat2b, titer == 900), predval900)
+# 
+# predval2700 <- data.frame(t(sapply(dat2b$ratio[which(dat2b$titer == 2700)], invpred2700)))
+# colnames(predval2700) <- c("pred", "se", "lci", "uci")
+# dat2b2700 <- cbind(subset(dat2b, titer == 2700), predval2700)
+
+predval8100 <- data.frame(t(sapply(dat2b$ratio[which(dat2b$titer == 8100)], invpred8100)))
+colnames(predval8100) <- c("pred", "se", "lci", "uci")
+dat2b8100 <- cbind(subset(dat2b, titer == 8100), predval8100)
+
+detach("package:aomisc")
+detach("package:drc")
+
+```
+
+
+```{r table2, echo=FALSE, include=TRUE, warnings=FALSE}  
+kable(cbind(fit1tab, fit8100tab)) %>% 
+  add_header_above(c("Parameter", "1:100 nOD" = 2, "1:8100 nOD" = 2)) %>%
+  kable_styling(full_width = F)
+```
+  
+RSE values are `r summary(fit1)$rseMat[1]` for the fit with 1:100 dilution nOD, and `r summary(fit8100)$rseMat[1]` for the fit with 1:8100 dilution nOD.
+
+### Figure 2
+
+A: Summary of normalized OD values obtained at each serial dilution
+
+```{r fig2a, echo=FALSE, include=TRUE, warnings=FALSE}
+
+dat1 %>%
+  mutate(jitter = (2 - as.numeric(exp)) / 25) %>%
+  mutate(titer2 = log(titer, 20)) %>%
+  mutate(titer2 = titer2 + jitter) %>%
+  ggplot() +
+  geom_line(aes(x = titer2, y = ratio_l45, group = newid, color = "L45"), alpha = 0.5) +
+  geom_line(aes(x = titer2, y = ratio_l46, group = newid, color = "L46"), alpha = 0.5) +
+  geom_point(aes(x = titer2, y = ratio_l45, color = "L45", shape = exp)) +
+  geom_point(aes(x = titer2, y = ratio_l46, color = "L46", shape = exp)) +
+  geom_hline(yintercept = 1.1, linetype = "dashed", color ="darkgray") +
+  geom_hline(yintercept = 0.8, linetype = "dashed", color ="darkgray") +
+  scale_x_continuous(breaks = log(c(100, 300, 900, 2700, 8100), 20), labels = c(100, 300, 900, 2700, 8100)) +
+  xlab("Reciprocal dilution") +
+  ylab("Normalized OD") +
+  theme_classic() +
+  scale_color_manual(name = "Survey", labels = c("Survey 1", "Survey 2"),
+                     values = mycol[1:2]) +
+  scale_shape_manual(name = "Exposure history", 
+                     labels = c("No infection, unvaccinated", "Prior infection, unvaccinated",
+                                "No infection, vaccinated", "Prior infection, vaccinated"), 
+                     values = c(0, 1, 15, 16))
+
+```
+  
+  
+B: Comparison of interpolated titer as estimated from serial dilutions to the normalized OD measured at a single dilution of 1:100
+
+```{r fig2b, echo=FALSE, warnings=FALSE}
+ggplot() +
+  geom_ribbon(aes(x = xfit, ymin = y1lo, ymax = y1hi), color = "lightgray", 
+              alpha = 0.2, data = predtab) +
+  geom_line(aes(x = xfit, y = y1), data = predtab) +
+  geom_point(aes(x = inter_l45.08, y = ratio_l45, color = "L45", shape = exp), data = dat1c) +
+  geom_point(aes(x = inter_l46.08, y = ratio_l46, color = "L46", shape = exp), data = dat1c) +
+  geom_hline(yintercept = 1.1, linetype = "dashed", color = "darkgray") +
+  geom_hline(yintercept = 0.8, linetype = "dashed", color = "darkgray") +
+  xlab(expression(paste(log[10], " interpolated titer"))) +
+  ylab("Normalized OD") +
+  scale_color_manual(name = "Survey", labels = c("Survey 1", "Survey 2"),
+                     values = mycol[1:2]) +
+  scale_shape_manual(name = "Exposure history", 
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"), 
+                     values = c(16, 15, 1, 0)) +
+  theme_classic()
+
+```
+
+  
+C: Comparison of interpolated titer as estimated from serial dilutions to the normalized OD measured at a single dilution of 1:8100
+
+```{r fig2c, echo=FALSE, warnings=FALSE}
+dat1d <- subset(dat1, titer == 8100)
+
+ggplot() +
+  geom_ribbon(aes(x = xfit, ymin = y8100lo, ymax = y8100hi), color = "lightgray", 
+              alpha = 0.2, data = predtab) +
+  geom_line(aes(x = xfit, y = y8100), data = predtab) +
+  geom_point(aes(x = inter_l45.08, y = ratio_l45, color = "L45", shape = exp), data = dat1d) +
+  geom_point(aes(x = inter_l46.08, y = ratio_l46, color = "L46", shape = exp), data = dat1d) +
+  geom_hline(yintercept = 1.1, linetype = "dashed", color = "darkgray") +
+  geom_hline(yintercept = 0.8, linetype = "dashed", color = "darkgray") +
+  xlab(expression(paste(log[10], " interpolated titer"))) +
+  ylab("Normalized OD") +
+  scale_color_manual(name = "Survey", labels = c("Survey 1", "Survey 2"),
+                     values = mycol[1:2]) +
+  scale_shape_manual(name = "Exposure history", 
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"), 
+                     values = c(16, 15, 1, 0)) +
+  theme_classic()
+
+```
+  
+### Figure 3
+
+A: Spaghetti plot of individual change in normalized OD between Survey 1 and Survey 2
+
+```{r fig3a, echo=FALSE, warnings=FALSE}
+
+ggplot(subset(dat1b, titer == 100)) +
+  geom_line(aes(x = survey, y = ratio, group = newid, color = exp), alpha = 0.5) +
+  geom_point(aes(x = survey, y = ratio, color = exp, shape = exp)) +
+  theme_classic() +
+  scale_x_discrete(name = "",  labels = c("Survey 1", "Survey 2")) +
+  scale_y_continuous("Normalized OD") +
+  scale_color_manual(name = "Exposure history",
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = rep(mycol[3:4], 2)) +
+  scale_shape_manual(name = "Exposure history",
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = c(16, 15, 1, 0))
+
+```
+
+
+B: Spaghetti plot of individual change in interpolated titer between Survey 1 and Survey 2
+
+```{r fig3b, echo=FALSE, warnings=FALSE}
+ggplot(subset(dat1b, titer == 100)) +
+  geom_line(aes(x = survey, y = inter08, group = newid, color = exp), alpha = 0.5) +
+  geom_point(aes(x = survey, y = inter08, color = exp, shape = exp)) +
+  theme_classic() +
+  scale_x_discrete(name = "",  labels = c("Survey 1", "Survey 2")) +
+  scale_y_continuous(expression(paste(log[10], " interpolated titer"))) +
+  scale_color_manual(name = "Exposure history",
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = rep(mycol[3:4], 2)) +
+  scale_shape_manual(name = "Exposure history",
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = c(16, 15, 1, 0))
+```
+
+C: Concordance of the direction of change (increase vs. decrease) between normalized OD and interpolated titer
+
+```{r fig3c, echo=FALSE, warnings=FALSE}
+r2temp <- sprintf("%.3f", round(cor.test(dat1c$ratiodel, dat1c$titerdel.08, method = 'pearson')$est, 3))
+rhotemp <- sprintf("%.3f", round(cor.test(dat1c$ratiodel, dat1c$titerdel.08, method = 'spearman')$est, 3))
+
+ggplot(dat1c) +
+  geom_point(aes(x = ratiodel, y = titerdel.08, shape = exp, color = exp)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "darkgray") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "darkgray") +
+  xlab(expression(paste(Delta, " normalized OD"))) +
+  ylab(expression(paste(Delta, log[10], " interpolated titer"))) +
+  theme_classic() +
+  annotate("text", label = bquote(r^2==.(r2temp) ~ ", " ~ rho==.(rhotemp)),
+           x = -6, y = 4, size = 4, hjust = 0) +
+ scale_color_manual(name = "Exposure history",
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = rep(mycol[3:4], 2)) +
+  scale_shape_manual(name = "Exposure history",
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = c(16, 15, 1, 0))
+
+```
+  
+  
+Of the `r nrow(subset(dat1c, nodl46 < nodl45))` individuals with an observed decline in antibody levels, `r nrow(subset(dat1c, nodl46 < nodl45 & pos45lo == "IgG +"))` had been previously infected, and `r nrow(subset(dat1c, nodl46 < nodl45 & pos45lo == "IgG -"))` had not. None of them had been vaccinated prior to the second survey.  
+
+  
+```{r roc, echo=FALSE, warnings=FALSE}  
+# AUC for detection of 4-fold increase or decrease
+dat1e <- dat1 %>%
+  dplyr::mutate(rawint46 = 10 ^ inter_l46.08, rawint45 = 10 ^ inter_l45.08) %>%
+  dplyr::mutate(titerinc = rawint46 / rawint45 >= 4) %>%
+  dplyr::mutate(titerdec = rawint46 / rawint45 <= 1/4) %>%
+  dplyr::mutate(ratiodiv = ratio_l46 / ratio_l45) %>%
+  dplyr::filter(titer == 100)
+
+aucinc <- roc(response = dat1e$titerinc, predictor = dat1e$ratiodiv)
+aucdec <- roc(response = dat1e$titerdec, predictor = dat1e$ratiodiv)
+
+rocres <- data.frame(cutoff = aucinc$thresholds, 
+                     sens = aucinc$sensitivities,
+                     spec = aucinc$specificities)
+
+rocopt <- rbind(
+  as.matrix(subset(rocres, sens == 1) %>% arrange(desc(spec)))[1, ],
+  as.matrix(subset(rocres, spec == 1) %>% arrange(desc(sens)))[1, ])
+
+conttab <- xtabs(~ (ratiodel < 0) + (titerdel.08 < 0), dat1e)
+
+  
+ci.auc(aucinc)
+
+```  
+  
+
+There is agreement in `r sum(conttab[1, 1], conttab[2, 2])` out of `r (sum(conttab))` samples (`r sprintf("%.2f", 100 * (sum(conttab[1, 1], conttab[2, 2]) / sum(conttab)))`% agreement, Cohen's kappa = `r DescTools::CohenKappa(conttab)`).
+  
+  
+The AUC for detection of a 4-fold increase in titer is `r as.numeric(aucinc$auc)`, 95% CI `r ci.auc(aucinc)[1]` - `r ci.auc(aucinc)[3]`. The AUC for detection of a 4-fold decrease in titer is `r as.numeric(aucdec$auc)`, 95% CI `r ci.auc(aucdec)[1]` - `r ci.auc(aucdec)[3]`.
+  
+The cutoffs to optimize sensitivity and specificity are below:
+`r kable(rocopt) %>% kable_styling(full_width = F)`   
+    
+### Figure 4  
+  
+Using the 5-parameter log-log curve fit shown in Table 2, we assess the ability of our model to predict interpolated titers from single-dilution nOD in a set of 40 samples. The distribution of exposures (prior infection and vaccination) among these 40 individuals is shown below:
+
+```{r desc4, echo=FALSE, warnings=FALSE}
+
+sumtab3 <- subset(dat2b100, survey == "l45") %>%
+  group_by(exp) %>%
+  dplyr::count()
+
+sumtab4 <- data.frame(inf = exptab$inf[match(sumtab3$exp, exptab$exp)],
+                  vax = exptab$vax[match(sumtab3$exp, exptab$exp)],
+                  n = as.numeric(unlist(sumtab3[, 2])))
+
+kable(sumtab4, col.names = c("Evidence of infection in 1st survey",
+                             "Vaccination prior to 2nd survey", "N")) %>%
+  kable_styling(full_width = F)
+
+```
+  
+  
+We evaluate the accuracy of predicting interpolated titers from nOD at a single dilution of 1:100, or 1:8100. We then evaluate the accuracy of a stepwise approach, whereby an initial nOD is measured at a dilution of 1:100. For samples with a measured nOD >5 at the 1:100 dilution, nOD is measured at an additional dilution of 1:8100. Prediction of the interpolated titers is performed using the prediction curves derived from the 1:100 dilution for samples with nOD <=5 at 1:100, and with the prediction curved derived from the 1:8100 dilution for samples with nOD >5 at 1:100.
+  
+A: Accuracy of prediction of interpolated titers using normalized OD at a single dilution of 1:100
+
+```{r fig4a, echo=FALSE, warnings=FALSE}
+
+r2temp <- sprintf("%.3f", round(cor.test(~ inter08 + pred,
+                                         data = dat2b100, 
+                                         method = "pearson")$estimate, 3))
+rhotemp <- sprintf("%.3f", round(cor.test(~ inter08 + pred, 
+                                          data = dat2b100, 
+                                          method = "spearman")$estimate, 3))
+
+ggplot(dat2b100) +
+  geom_linerange(aes(x = inter08, ymin = lci, ymax = uci, color = survey)) +
+  geom_point(aes(x = inter08, y = pred, shape = exp, color = survey)) + 
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color ="darkgray") +
+  scale_x_continuous("Measured titer",
+                     breaks = seq(0, 6, 1), limits = c(0, 6)) +
+  scale_y_continuous("Predicted titer",
+                     breaks = seq(0, 6, 1), limits = c(0, 6)) +
+  theme_classic() +
+  scale_shape_manual(name = "Exposure history", 
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"), 
+                     values = c(16, 15, 1, 0)) +
+  scale_color_manual(name = "Survey", labels = c("Survey 1", "Survey 2"),
+                     values = mycol[1:2]) +
+  annotate("text", label = bquote(r^2==.(r2temp) ~ ", " ~ rho==.(rhotemp)),
+           x = 1, y = 6, size = 6, hjust = 0) 
+  
+```
+
+
+B: Accuracy of prediction of interpolated titers using normalized OD at a single dilution of 1:8100
+
+```{r fig4b, echo=FALSE, warnings=FALSE}
+r2temp <- sprintf("%.3f", round(cor.test(~ inter08 + pred,
+                                         data = dat2b8100, 
+                                         method = "pearson")$estimate, 3))
+rhotemp <- sprintf("%.3f", round(cor.test(~ inter08 + pred, 
+                                          data = dat2b8100, 
+                                          method = "spearman")$estimate, 3))
+
+ggplot(dat2b8100) +
+  geom_linerange(aes(x = inter08, ymin = lci, ymax = uci, color = survey)) +
+  geom_point(aes(x = inter08, y = pred, shape = exp, color = survey)) + 
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color ="darkgray") +
+  scale_x_continuous("Measured titer",
+                     breaks = seq(0, 6, 1), limits = c(0, 6)) +
+  scale_y_continuous("Predicted titer",
+                     breaks = seq(0, 6, 1), limits = c(0, 6)) +
+  theme_classic() +
+  scale_shape_manual(name = "Exposure history", 
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"), 
+                     values = c(16, 15, 1, 0))+
+  scale_color_manual(name = "Survey", labels = c("Survey 1", "Survey 2"),
+                     values = mycol[1:2]) +
+  annotate("text", label = bquote(r^2==.(r2temp) ~ ", " ~ rho==.(rhotemp)),
+           x = 1, y = 6, size = 6, hjust = 0) 
+
+```
+  
+  
+C: Accuracy of prediction of interpolated titers using stepwise approach, with normalized OD at 1:100 and 1:8100
+
+```{r fig4c, echo=FALSE, warnings=FALSE}
+dat2c <- merge(dat2b100, dat2b8100[, c(1:2, 7:8, 11:14)], 
+               by = c("newid", "survey"), all = T,
+               suffixes = c(".100", ".8100"))
+
+# set different cutoffs for applying prediction curve from 1:100 vs 1:1800 dilution
+dat2c <- dat2c %>%
+  dplyr::mutate(ycut5 = ifelse(ratio.100 <= 5, pred.100, pred.8100)) %>%
+  dplyr::mutate(ycut6 = ifelse(ratio.100 <= 6, pred.100, pred.8100)) %>%
+  dplyr::mutate(ycut7 = ifelse(ratio.100 <= 7, pred.100, pred.8100)) %>%
+  dplyr::mutate(ycut8 = ifelse(ratio.100 <= 8, pred.100, pred.8100)) %>%
+  dplyr::mutate(ycut9 = ifelse(ratio.100 <= 9, pred.100, pred.8100)) %>%
+  dplyr::mutate(ycut10 = ifelse(ratio.100 <= 10, pred.100, pred.8100)) %>%
+  dplyr::mutate(ycut7lo = ifelse(ratio.100 <= 7, lci.100, lci.8100)) %>%
+  dplyr::mutate(ycut7hi = ifelse(ratio.100 <= 7, uci.100, uci.8100)) 
+
+cortab <- data.frame(cut = seq(5, 10, 1),
+                     r2 = NA, rho = NA)
+for(i in 1:6){
+  cortab$r2[i] <- cor.test(dat2c$inter08, dat2c[, 20 + i], method = 'pearson')$estimate
+  cortab$rho[i] <- cor.test(dat2c$inter08, dat2c[, 20 + i], method = 'spearman')$estimate
+}
+
+ggplot(dat2c) +
+  geom_linerange(aes(x = inter08, ymin = ycut7lo, ymax = ycut7hi, color = survey)) +
+  geom_point(aes(x = inter08, y = ycut7, shape = exp, color = survey)) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color ="darkgray") +
+  scale_x_continuous("Measured titer",
+                     breaks = seq(0, 6, 1), limits = c(0, 6)) +
+  scale_y_continuous("Predicted titer",
+                     breaks = seq(0, 6, 1), limits = c(0, 6)) +
+  theme_classic() +
+  scale_shape_manual(name = "Exposure history", 
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"), 
+                     values = c(16, 15, 1, 0))+
+  scale_color_manual(name = "Survey", labels = c("Survey 1", "Survey 2"),
+                     values = mycol[1:2]) +
+  annotate("text", label = bquote(r^2==.(cortab$r2[3]) ~ 
+                                    ", " ~ rho==.(cortab$rho[3])),
+           x = 1, y = 6, size = 6, hjust = 0)
+                
+```
+
+D: Correlation of change in predicted titer vs. change in measured titer
+
+```{r fig4d, echo=FALSE, warnings=FALSE}
+dat2d <- dat2c %>%
+  # Set values < 0.078 (LoD) to 0
+  dplyr::mutate(ycut7 = replace(ycut7, ratio.100 < 0.078, 0)) %>%
+  dplyr::select(c("newid", "survey", "inter08", "ycut7", "exp", "pos45lo")) %>%
+  tidyr::pivot_wider(id_cols = c("newid", "exp", "pos45lo"), names_from = "survey", 
+              values_from = c("inter08", "ycut7")) %>%
+  dplyr::mutate(delmeas = inter08_l46 - inter08_l45) %>%
+  dplyr::mutate(delpred = ycut7_l46 - ycut7_l45)
+
+r2temp <- sprintf("%.3f", round(cor.test(dat2d$delmeas, dat2d$delpred, method = 'pearson')$est, 3))
+rhotemp <- sprintf("%.3f", round(cor.test(dat2d$delmeas, dat2d$delpred, method = 'spearman')$est, 3))
+
+ggplot(dat2d) +
+  geom_point(aes(x = delmeas, y = delpred, shape = exp, color = exp)) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color ="darkgray") +
+  scale_x_continuous("Change in measured titer", limits = c(-1, 4), breaks = seq(-1, 4, 1)) +
+  scale_y_continuous("Change in predicted titer", limits = c(-1, 4), breaks = seq(-1, 4, 1)) +
+   scale_color_manual(name = "Exposure history",
+                     breaks = levels(dat2d$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = rep(mycol[3:4], 2)) +
+  scale_shape_manual(name = "Exposure history",
+                     breaks = levels(dat2d$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = c(16, 15, 1, 0)) +
+  annotate("text", label = bquote(r^2==.(r2temp) ~ ", " ~ rho==.(rhotemp)),
+           x = -1, y = 4, size = 6, hjust = 0) +
+  theme_classic()
+
+# Minimum OD value at 1:100 for which we can predict titer, corresponding titer
+minpredod <- min(predtabcomp100$od)
+minpredti <- min(predtabcomp100$pred)
+
+```
+
+  
+We can impute predicted titers for samples with nOD (1:100 dilution) above the limit of detection (0.078) but below the limit of prediction (`r minpredod`), to 1/2 the predicted titer at the limit of prediction (`r minpredti`). 
+    
+E: Correlation of change in predicted titer vs. change in measured titer
+```{r fig4d2, echo=FALSE, warnings=FALSE}
+
+dat2d2 <- dat2c %>%
+  # Set values < 0.078 (LoD) to 0
+  # values >= 0.078 and < min(predictable OD) to 1/2 of min(predictable OD)
+  dplyr::mutate(ycut7 = replace(ycut7, ratio.100 < 0.078, 0)) %>%
+  dplyr::mutate(ycut7 = replace(ycut7, 
+                                ratio.100 >= 0.078 & ratio.100 < minpredod,
+                                minpredti / 2)) %>%
+  dplyr::select(c("newid", "survey", "inter08", "ycut7", "exp", "pos45lo")) %>%
+  tidyr::pivot_wider(id_cols = c("newid", "exp", "pos45lo"), names_from = "survey", 
+              values_from = c("inter08", "ycut7")) %>%
+  dplyr::mutate(delmeas = inter08_l46 - inter08_l45) %>%
+  dplyr::mutate(delpred = ycut7_l46 - ycut7_l45)
+
+r2temp2 <- sprintf("%.3f", round(cor.test(dat2d2$delmeas, dat2d2$delpred, method = 'pearson')$est, 3))
+rhotemp2 <- sprintf("%.3f", round(cor.test(dat2d2$delmeas, dat2d2$delpred, method = 'spearman')$est, 3))
+
+ggplot(dat2d2) +
+  geom_point(aes(x = delmeas, y = delpred, shape = exp, color = exp)) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color ="darkgray") +
+  scale_x_continuous("Change in measured titer", limits = c(-2, 4), breaks = seq(-2, 4, 1)) +
+  scale_y_continuous("Change in predicted titer", limits = c(-2, 4), breaks = seq(-2, 4, 1)) +
+  scale_color_manual(name = "Exposure history",
+                     breaks = levels(dat2d2$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = rep(mycol[3:4], 2)) +
+  scale_shape_manual(name = "Exposure history",
+                     breaks = levels(dat2d2$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = c(16, 15, 1, 0)) +
+  annotate("text", label = bquote(r^2==.(r2temp2) ~ ", " ~ rho==.(rhotemp2)),
+           x = -2, y = 4, size = 6, hjust = 0) +
+  theme_classic() 
+
+```
+
+
+### Table 3: ELISA nOD to titer conversion
+Based on the prediction approach described in Figure 3C, we derive a prediction table to convert single-dilution normalized OD measurements to estimated titers.
+
+```{r table3, echo=FALSE, include=TRUE, warnings=FALSE}  
+
+colnames(predtabcomp100)[1] <- "od.100"
+colnames(predtabcomp8100)[1] <- "od.8100"
+
+predtabfinal <- bind_rows(subset(predtabcomp100, od.100 < 7.1), predtabcomp8100) %>%
+  subset(!is.na(pred)) %>%
+  dplyr::arrange(pred) %>%
+  dplyr::relocate(od.8100, .after = od.100)
+
+kable(predtabfinal, col.names = c("nOD 1:100", "nOD 1:8100", "Predicted titer", "SE", "Lower 95% CI limit", "Upper 95% CI limit")) %>% kable_styling()
+```
+  
+```{r assays, echo=FALSE, warnings=FALSE}
+# Estimate the reduction in number of assays needed for the samples in this study
+
+# Total number of samples
+nsamp <- length(unique(interaction(dat1b$survey, dat1b$newid))) + length(unique(interaction(dat2b$survey, dat2b$newid)))
+
+# Dilutions per sample for full titer
+ndil <- length(unique(dat1$titer))
+
+# Samples w/ nOD <5 at 1:100
+nlo <- nrow(subset(dat1b, titer == 100 & ratio <= 7)) + 
+  nrow(subset(dat2b, titer == 100 & ratio <= 7))
+
+# Samples w/ nOD >=5 at 1:100
+nhi <- nrow(subset(dat1b, titer == 100 & ratio > 7)) + 
+  nrow(subset(dat2b, titer == 100 & ratio > 7))
+
+```
+  
+This approach would have reduced the total number of dilutions required for the `r nsamp` samples included in this study from `r nsamp * ndil` (`r ndil` dilutions per sample) to 1 dilution for the `r nlo` samples with nOD <= 7 at 1:100 and 2 dilutions for the `r nhi` samples with nOD >7 at 1:100, for a total of `r nlo + nhi * 2` dilutions. This represents a `r sprintf("%.2f", 100 * ((nsamp * ndil) - (nlo + 2 * nhi)) / (nsamp * ndil))`% or `r sprintf("%.2f", (nsamp * ndil) / (nlo + 2 * nhi))`-fold reduction.
+    
+### Figure 5
+  
+We repeated our primary analyses using using an OD cutoff for the presence of anti-S antibody of 1.1 (vs. 0.8) to assess the robustness of our findings.
+
+A: Relationship and parametric fit of normalized OD to interpolated titers, using 1.1 cutoff
+
+```{r fig5a, echo=FALSE, warnings=FALSE}
+
+ggplot() +
+  geom_ribbon(aes(x = xfit, ymin = y2lo, ymax = y2hi), color = "lightgray", 
+              alpha = 0.2, data = predtab) +
+  geom_line(aes(x = xfit, y = y2), data = predtab) +
+  geom_point(aes(x = inter_l45.11, y = ratio_l45, color = "L45", shape = exp), data = dat1c) +
+  geom_point(aes(x = inter_l46.11, y = ratio_l46, color = "L46", shape = exp), data = dat1c) +
+  geom_hline(yintercept = 1.1, linetype = "dashed", color = "darkgray") +
+  geom_hline(yintercept = 0.8, linetype = "dashed", color = "darkgray") +
+  xlab(expression(paste(log[10], "interpolated titer"))) +
+  ylab("Normalized OD") +
+  scale_color_manual(name = "Survey", labels = c("Survey 1", "Survey 2"),
+                     values = mycol[1:2]) +
+  scale_shape_manual(name = "Exposure history", 
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"), 
+                     values = c(16, 15, 1, 0)) +
+  theme_classic()
+
+```
+
+B: Spaghetti plot of change in interpolated titer between Survey 1 and Survey 2, using 1.1 cutoff
+
+```{r fig5b, echo=FALSE, warnings=FALSE}
+ggplot(subset(dat1b, titer == 100)) +
+  geom_line(aes(x = survey, y = inter11, group = newid, color = exp2), alpha = 0.5) +
+  geom_point(aes(x = survey, y = inter11, color = exp2, shape = exp2)) +
+  theme_classic() +
+  scale_x_discrete(name = "",  labels = c("Survey 1", "Survey 2")) +
+  scale_y_continuous(expression(paste(log[10], " interpolated titer"))) +
+ scale_color_manual(name = "Exposure history",
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = rep(mycol[3:4], 2)) +
+  scale_shape_manual(name = "Exposure history",
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = c(16, 15, 1, 0))
+```
+
+C: Concordance of the direction of change (increase vs. decrease) between normalized OD and interpolate titer, using 1.1 cutoff
+
+```{r fig5c, echo=FALSE, warnings=FALSE}
+r2temp <- sprintf("%.3f",round(cor.test(dat1c$ratiodel, dat1c$titerdel.11, method = 'pearson')$est, 3))
+rhotemp <- sprintf("%.3f", round(cor.test(dat1c$ratiodel, dat1c$titerdel.11, method = 'spearman')$est, 3))
+
+ggplot(dat1c) +
+  geom_point(aes(x = ratiodel, y = titerdel.11, shape = exp2, color = exp2)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "darkgray") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "darkgray") +
+  xlab(expression(paste(Delta, " normalized OD"))) +
+  ylab(expression(paste(Delta, log[10], " interpolated titer"))) +
+  theme_classic() +
+  annotate("text", label = bquote(r^2==.(r2temp) ~ ", " ~ rho==.(rhotemp)),
+           x = -6, y = 4, size = 4, hjust = 0) +
+ scale_color_manual(name = "Exposure history",
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                    values = rep(mycol[3:4], 2)) +
+  scale_shape_manual(name = "Exposure history",
+                     breaks = levels(dat1$exp)[4:1],
+                     labels = c("Prior infection, vaccinated", "No infection, vaccinated",
+                                "Prior infection, unvaccinated", "No infection, unvaccinated"),
+                     values = c(16, 15, 1, 0))
+
+```
+
+
+### Table 4: Precision analysis
+We repeated the serial dilution ELISAs and estimated the interpolated titers (using positivity cutoffs of 0.8 and 1.1) 5 times in a subset of 5 samples ranging from low to high values. The range, mean, standard deviation and coefficient of varition for each set of 5 replicates are shown below:
+
+```{r precision, echo = F, include = T, warnings = F}
+
+library(tidyverse)
+
+dat3b <- dplyr::filter(dat3, titer == 100) %>%
+  dplyr::group_by(newid) %>%
+  dplyr::mutate(ti08_range = paste0(sprintf("%.3f", min(inter_l46.08, na.rm = T)), "-", 
+                             sprintf("%.3f", max(inter_l46.08, na.rm = T)))) %>%
+  dplyr::mutate(ti08_range = replace(ti08_range, sum(!is.na(inter_l46.08)) == 0, NA)) %>%
+  dplyr:: mutate(ti08_mean = mean(inter_l46.08, na.rm = T)) %>%
+  dplyr::mutate(ti08_mean = replace(ti08_mean, sum(!is.na(inter_l46.08)) == 0, NA)) %>%
+  dplyr::mutate(ti08_sd = sd(inter_l46.08, na.rm = T)) %>%
+  dplyr::mutate(ti08_sd = replace(ti08_sd, sum(!is.na(inter_l46.08)) == 0, NA)) %>%
+  dplyr::mutate(ti08_cv = ti08_sd / ti08_mean) %>%
+  dplyr::mutate(ti11_range = paste0(sprintf("%.3f", min(inter_l46.11, na.rm = T)), "-", 
+                             sprintf("%.3f", max(inter_l46.11, na.rm = T)))) %>%
+  dplyr::mutate(ti11_range = replace(ti11_range, sum(!is.na(inter_l46.11)) == 0, NA)) %>%
+  dplyr::mutate(ti11_mean = mean(inter_l46.11, na.rm = T)) %>%
+  dplyr::mutate(ti11_mean = replace(ti11_mean, sum(!is.na(inter_l46.11)) == 0, NA)) %>%
+  dplyr::mutate(ti11_sd = sd(inter_l46.11, na.rm = T)) %>%
+  dplyr::mutate(ti11_sd = replace(ti11_sd, sum(!is.na(inter_l46.11)) == 0, NA)) %>%
+  dplyr::mutate(ti11_cv = ti11_sd / ti11_mean) %>%
+  dplyr::mutate(od_range = paste0(sprintf("%.3f", min(ratio_l46, na.rm = T)), "-", 
+                           sprintf("%.3f", max(ratio_l46, na.rm = T)))) %>%
+  dplyr::mutate(od_mean = mean(ratio_l46, na.rm = T)) %>%
+  dplyr::mutate(od_sd = sd(ratio_l46, na.rm = T)) %>%
+  dplyr::mutate(od_cv = od_sd / od_mean) %>%
+  dplyr::select(-c("nodl45", "nodl46", "pos45lo", "pos45hi", "pos45lo", "pos46lo", 
+            "pos46hi", "nodratio", "noddiff", "d1pre46", "titer")) %>%
+  dplyr::mutate(sample = row_number()) %>%
+  dplyr::arrange(od_mean, newid)
+
+dat3b <- dat3b[, c(1, 17, 2, 13:16, 3, 5:8, 4, 9:12)]
+
+dat3c <- subset(dat3b, sample == 1) %>%
+  mutate(od_cv = sprintf("%.2f", od_cv * 100)) %>%
+  mutate(ti08_cv = sprintf("%.2f", ti08_cv * 100)) %>%
+  mutate(ti11_cv = sprintf("%.2f", ti11_cv * 100)) %>%
+  dplyr::select(-c("sample", "ratio_l46", "inter_l46.08", "inter_l46.11")) %>%
+  dplyr::mutate(across(.cols = c("od_mean", "od_sd", "ti08_mean", "ti08_sd", "ti11_mean", "ti11_sd"),
+         ~ sprintf("%.3f", .x))) %>%
+  dplyr::arrange(od_mean)
+
+knitr::kable(dat3c, col.names = c("ID", rep(c("Range", "Mean", "SD", "%CV"), 3)), "html") %>%
+  add_header_above(c("", "nOD" = 4, "Titer (cutoff 0.8)" = 4, "Titer (cutoff 1.1)" = 4)) %>%
+  kable_styling(full_width = T)
+
+```
